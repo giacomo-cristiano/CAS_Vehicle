@@ -1,11 +1,12 @@
 /* APS380 CAS Project Code
    Last Modified: by Ziming MA
    date: 2024-11-30
-   version: v0.0.4b
-   description: CAS v2 & ABS
+   version: v0.0.5
+   description: Bluetooth control
    history: v0.0.1: Ziming MA     : basic control
             v0.0.2: Ziming MA     : motor speed sensing & control
             v0.0.3: Ahmad Kaleem  : TF-Luna Lidar INterface & CAS v1
+            v0.0.4: Ziming MA     : CAS v2 & ABS
 */
 
 // ==================== Library Include ====================
@@ -24,13 +25,13 @@
 #define left_tach 19
 #define right_tach 18
 // motor speed sensor
-#define rx_bluetooth 10
-#define tx_bluetooth 11
+#define rx_bluetooth 50
+#define tx_bluetooth 51
 
 // ==================== Constants Defination ====================
-#define max_speed_left 50
-#define max_speed_right 50
-#define CAS_trigger_distance 20
+#define max_speed_left 100
+#define max_speed_right 100
+#define CAS_trigger_distance 40
 
 // ==================== Global Variable Defination ====================
 // distance sensor global variable
@@ -54,7 +55,7 @@ bool ABS_active = false;
 int state = 0;  // to keep track which state car is in currently.
 /* 
   1: forward
-  2: backward
+  -2: backward
   3: rotate left
   4: rotate right
   8: forward full speed
@@ -97,7 +98,7 @@ void ABS() {
   // stop();
   // moving direction
   int direction = 1;
-  if ((state <= 3) && (state >= 1)) {
+  if (state < 0) {
     direction = -1;
   }
   int counter_now = counter_left + counter_right;  // current total counter value
@@ -105,33 +106,24 @@ void ABS() {
   int counter_diff = 100;                          // difference in total counter value for rotation speed estimation
   int counter_diff_pre = 200;                      // difference in total counter value for rotation speed estimation
   int counter_stop = 0;                            // number of countinous low speed iterations detected
-  int mode = 0;                                    // previous iteration breaking mode, 0 for low torque, 1 for negtive torque, 2 for negtive torque
-  int counter_try_flip_sign = 0;
   while (counter_stop < 10) {                      // if low speed for over 10 period, exit the loop
     counter_now = counter_left + counter_right;    // update counter values
     counter_diff = counter_now - counter_pre;      // estimate speed
     Serial.println(counter_now);
     Serial.println(counter_diff);
     // check estimated speed
-    if ((mode != 0) && ((counter_diff_pre - counter_diff) < -1)) {
-      // positive acceleration detected => wrong firection assumption => flip torque direction
-      stop();
-      Serial.println("flip torque direction");
-      if (counter_try_flip_sign > 2) {
-        direction = -direction;
-        counter_try_flip_sign = 0;
-      } else {
-        counter_try_flip_sign ++;
-      }
-      mode = 0;
-    } else if (counter_diff < 3) {
+    if (counter_diff < 3) {
       // this iteration is low speed, low torque breaking applied
       stop();
-      counter_try_flip_sign = 0;
-      mode = 0;
       Serial.println("low speed");
       counter_stop++;
-    } else {
+    } 
+    else if ((counter_diff_pre - counter_diff) < -1) {
+      // positive acceleration detected => wrong firection assumption => flip torque direction
+      stop();
+      Serial.println("postive acceleration detected");
+    }
+    else {
       // this iteration is high speed, high torque breaking applied
       if (direction == 1) {  // moving forward, apply negtive torque
         Serial.println("negtive torque");
@@ -139,14 +131,12 @@ void ABS() {
         digitalWrite(motor_left_1, HIGH);
         digitalWrite(motor_right, LOW);
         digitalWrite(motor_right_1, HIGH);
-        mode = 1;
       } else if (direction == -1) {  // moving backward, apply negtive torque
         Serial.println("positive torque");
         digitalWrite(motor_left, HIGH);
         digitalWrite(motor_left_1, LOW);
         digitalWrite(motor_right, HIGH);
         digitalWrite(motor_right_1, LOW);
-        mode = 2;
       }
     }
     // wait for 10ms then go to next iteration
@@ -188,30 +178,36 @@ void serial_handler() {
     case ' ':  // stop.
       state = 0;
       stop();
+      Serial.println("stop");
+      BluetoothControl.println("stop");
       break;
     case 'w':  // forward
       state = 1;
       forward_left(max_speed_left);
       forward_right(max_speed_right);
       Serial.println("forward");
+      BluetoothControl.println("forward");
       break;
     case 's':  // backward
-      state = 2;
+      state = -2;
       backward_left(max_speed_left);
       backward_right(max_speed_right);
       Serial.println("backward");
+      BluetoothControl.println("backward");
       break;
     case 'a':  // rotate left
       state = 3;
-      backward_left(20);
-      forward_right(20);
+      backward_left(max_speed_left);
+      forward_right(max_speed_right);
       Serial.println("left");
+      BluetoothControl.println("left");
       break;
     case 'd':  // rotate right
       state = 4;
-      forward_left(20);
-      backward_right(20);
+      forward_left(max_speed_left);
+      backward_right(max_speed_right);
       Serial.println("right");
+      BluetoothControl.println("right");
       break;
     case 'q':  // full speed forward
       state = 8;
@@ -220,11 +216,13 @@ void serial_handler() {
       digitalWrite(motor_right, HIGH);
       digitalWrite(motor_right_1, LOW);
       Serial.println("forward full speed");
+      BluetoothControl.println("forward full speed");
       break;
     case 'e':  // flip CAS mode: ABS or Traditional
       CAS_ABS = ! CAS_ABS;
       Serial.print("ABS enabled for CAS: ");
       Serial.println(CAS_ABS);
+      BluetoothControl.println("ABS enabled for CAS: " + String(CAS_ABS));
       break;
       /*
     default:
@@ -246,6 +244,7 @@ void setup() {
   pinMode(motor_right, OUTPUT);
   pinMode(motor_right_1, OUTPUT);
   Serial.begin(9600);
+  BluetoothControl.begin(9600);
   stop();
   Wire.begin();  // Initalize Wire library
   attachInterrupt(digitalPinToInterrupt(left_tach), handler_count_left, RISING);
@@ -263,24 +262,29 @@ void loop() {
     //Serial.println(String(tfDist)+" cm / " + String(tfDist/2.54)+" inches");
     if (tfDist < CAS_trigger_distance && state > 0) {
       Serial.println("Object detected - handling");
+      BluetoothControl.println("Object detected - handling");
       if (CAS_ABS){
         ABS();
+         BluetoothControl.println("ABS CAS triggered");
       } else {
+        BluetoothControl.println("non-ABS CAS triggered");
         stop();
       }
       state = -1;
       Serial.println("Object detected - done");
+      BluetoothControl.println("Object detected - done");
     }
   }
   // serial control handle
   if (Serial.available() > 0) {
     command = Serial.read();
     Serial.println("serial control: " + String(command));
+    BluetoothControl.println("serial control: " + String(command));
     serial_handler();
   }
   if (BluetoothControl.available() > 0) {
     command = BluetoothControl.read();
-    Serial.println("bluetooth control: " + String(command));
+    Serial.println("bluetooth received: " + String(command));
     BluetoothControl.println("Arduino received: " + String(command));
     serial_handler();
   }
