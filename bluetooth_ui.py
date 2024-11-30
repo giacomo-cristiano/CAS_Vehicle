@@ -4,6 +4,9 @@ import serial
 import threading
 import time
 import serial.tools.list_ports
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import math
 
 
 class BluetoothApp:
@@ -15,6 +18,12 @@ class BluetoothApp:
         self.bt_connection = None
         self.read_thread = None
         self.connected = False
+
+        # Variables to hold speed data for plotting
+        self.speed_data = []
+
+        # Wheel radius in meters (adjust this based on your hardware)
+        self.wheel_radius = 0.03  # Example radius, 10 cm. Modify as needed.
 
         # GUI Components
         self.create_widgets()
@@ -74,6 +83,22 @@ class BluetoothApp:
                                     width=15)
         self.accel_btn.grid(row=2, column=2, padx=5)
 
+        # Speed plotting area
+        self.plot_frame = tk.Frame(self.root)
+        self.plot_frame.grid(row=6, column=0, columnspan=2, pady=10)
+
+        # Initialize the plot
+        self.fig, self.ax = plt.subplots()
+        self.ax.set_title("Speed over Time")
+        self.ax.set_xlabel("Time (s)")
+        self.ax.set_ylabel("Speed (m/s)")  # Updated to m/s
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
+        self.canvas.get_tk_widget().pack()
+
+        # Set up the plot update interval (e.g., every 100ms)
+        self.update_plot_interval = 100  # milliseconds
+        self.root.after(self.update_plot_interval, self.update_plot)
+
     def get_available_ports(self):
         """Fetch the list of available COM ports."""
         ports = serial.tools.list_ports.comports()
@@ -108,11 +133,45 @@ class BluetoothApp:
                 if self.bt_connection.in_waiting > 0:
                     message = self.bt_connection.readline().decode('utf-8').strip()
                     if message:
-                        self.log_message(f"HC-05: {message}")
+                        if message.startswith("s:"):  # Handle speed data
+                            self.process_speed_data(message)
+                        elif message.startswith("l:"):  # Display logs starting with l:
+                            self.log_message(message)
             except Exception as e:
                 self.log_message(f"Error reading from HC-05: {e}")
                 self.connected = False
                 break
+
+    def process_speed_data(self, message):
+        """Process speed data and convert RPM to m/s."""
+        try:
+            # Extract the RPM value from the message, e.g., s: 45
+            rpm = float(message[2:].strip())
+            speed_m_s = self.convert_rpm_to_m_s(rpm)
+            self.speed_data.append(speed_m_s)
+
+        except ValueError:
+            self.log_message(f"Error processing speed data: {message}")
+
+    def convert_rpm_to_m_s(self, rpm):
+        """Convert RPM to m/s based on the wheel radius."""
+        # Formula: Speed (m/s) = RPM * (2 * pi * radius) / 60
+        return rpm * (2 * math.pi * self.wheel_radius) / 60
+
+    def update_plot(self):
+        """Update the plot continuously."""
+        if self.speed_data:
+            # Update the plot with new speed data
+            self.ax.clear()
+            self.ax.plot(self.speed_data, label="Speed", color='blue')
+            self.ax.set_title("Speed over Time")
+            self.ax.set_xlabel("Time (s)")
+            self.ax.set_ylabel("Speed (m/s)")
+            self.ax.legend()
+            self.canvas.draw()
+
+        # Call this method again after the defined interval
+        self.root.after(self.update_plot_interval, self.update_plot)
 
     def send_command(self, command):
         try:
