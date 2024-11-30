@@ -1,14 +1,16 @@
 /* APS380 CAS Project Code
    Last Modified: by Ziming MA
    date: 2024-11-30
-   version: v0.0.5
+   version: v0.0.5a
    description: Bluetooth control
    history: v0.0.1: Ziming MA     : basic control
             v0.0.2: Ziming MA     : motor speed sensing & control
             v0.0.3: Ahmad Kaleem  : TF-Luna Lidar INterface & CAS v1
             v0.0.4: Ziming MA     : CAS v2 & ABS
 */
-
+// "l: infor ... "
+// "v: 11"
+// "i: 1.1"
 // ==================== Library Include ====================
 #include <arduino-timer.h>
 #include <Wire.h>    // Instantiate the Wire library
@@ -113,7 +115,7 @@ void ABS() {
     Serial.println(counter_diff);
     // check estimated speed
     if (counter_diff < 3) {
-      // this iteration is low speed, low torque breaking applied
+      // this iteration is low speed, low torque braking applied
       stop();
       Serial.println("low speed");
       counter_stop++;
@@ -124,7 +126,7 @@ void ABS() {
       Serial.println("postive acceleration detected");
     }
     else {
-      // this iteration is high speed, high torque breaking applied
+      // this iteration is high speed, high torque braking applied
       if (direction == 1) {  // moving forward, apply negtive torque
         Serial.println("negtive torque");
         digitalWrite(motor_left, LOW);
@@ -167,6 +169,8 @@ void RPM() {
     // 20 holes on the disk
     // Serial.println(counter_left / 20 * 60);
     // Serial.println(counter_right / 20 * 60);
+    BluetoothControl.println("s:" + String(counter_left + counter_right / 20 * 60 / 2));
+    Serial.println("s:" + String(counter_left + counter_right / 20 * 60 / 2));
     counter_left = 0;
     counter_right = 0;
   }
@@ -179,35 +183,41 @@ void serial_handler() {
       state = 0;
       stop();
       Serial.println("stop");
-      BluetoothControl.println("stop");
+      BluetoothControl.println("l:stop");
+      break;
+    case 't':  // stop.
+      state = 0;
+      stop();
+      Serial.println("stop");
+      BluetoothControl.println("l:stop");
       break;
     case 'w':  // forward
       state = 1;
       forward_left(max_speed_left);
       forward_right(max_speed_right);
       Serial.println("forward");
-      BluetoothControl.println("forward");
+      BluetoothControl.println("l:forward");
       break;
     case 's':  // backward
       state = -2;
       backward_left(max_speed_left);
       backward_right(max_speed_right);
       Serial.println("backward");
-      BluetoothControl.println("backward");
+      BluetoothControl.println("l:backward");
       break;
     case 'a':  // rotate left
       state = 3;
       backward_left(max_speed_left);
       forward_right(max_speed_right);
       Serial.println("left");
-      BluetoothControl.println("left");
+      BluetoothControl.println("l:left");
       break;
     case 'd':  // rotate right
       state = 4;
       forward_left(max_speed_left);
       backward_right(max_speed_right);
       Serial.println("right");
-      BluetoothControl.println("right");
+      BluetoothControl.println("l:right");
       break;
     case 'q':  // full speed forward
       state = 8;
@@ -216,13 +226,13 @@ void serial_handler() {
       digitalWrite(motor_right, HIGH);
       digitalWrite(motor_right_1, LOW);
       Serial.println("forward full speed");
-      BluetoothControl.println("forward full speed");
+      BluetoothControl.println("l:forward full speed");
       break;
     case 'e':  // flip CAS mode: ABS or Traditional
       CAS_ABS = ! CAS_ABS;
       Serial.print("ABS enabled for CAS: ");
       Serial.println(CAS_ABS);
-      BluetoothControl.println("ABS enabled for CAS: " + String(CAS_ABS));
+      BluetoothControl.println("l:ABS enabled for CAS: " + String(CAS_ABS));
       break;
       /*
     default:
@@ -262,30 +272,30 @@ void loop() {
     //Serial.println(String(tfDist)+" cm / " + String(tfDist/2.54)+" inches");
     if (tfDist < CAS_trigger_distance && state > 0) {
       Serial.println("Object detected - handling");
-      BluetoothControl.println("Object detected - handling");
+      BluetoothControl.println("l:Object detected - handling");
       if (CAS_ABS){
         ABS();
-         BluetoothControl.println("ABS CAS triggered");
+         BluetoothControl.println("l:ABS CAS triggered");
       } else {
-        BluetoothControl.println("non-ABS CAS triggered");
+        BluetoothControl.println("l:non-ABS CAS triggered");
         stop();
       }
       state = -1;
       Serial.println("Object detected - done");
-      BluetoothControl.println("Object detected - done");
+      BluetoothControl.println("l:Object detected - done");
     }
   }
   // serial control handle
   if (Serial.available() > 0) {
     command = Serial.read();
     Serial.println("serial control: " + String(command));
-    BluetoothControl.println("serial control: " + String(command));
+    BluetoothControl.println("l:serial control: " + String(command));
     serial_handler();
   }
   if (BluetoothControl.available() > 0) {
     command = BluetoothControl.read();
     Serial.println("bluetooth received: " + String(command));
-    BluetoothControl.println("Arduino received: " + String(command));
+    BluetoothControl.println("l:Arduino received: " + String(command));
     serial_handler();
   }
   timer.tick();  // tick the timer
