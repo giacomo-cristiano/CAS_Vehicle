@@ -1,7 +1,7 @@
 /* APS380 CAS Project Code
    Last Modified: by Ziming MA
-   date: 2024-11-30
-   version: v0.0.5a
+   date: 2024-12-02
+   version: v0.0.5b
    description: Bluetooth control
    history: v0.0.1: Ziming MA     : basic control
             v0.0.2: Ziming MA     : motor speed sensing & control
@@ -16,6 +16,8 @@
 #include <Wire.h>    // Instantiate the Wire library
 #include <TFLI2C.h>  // TFLuna-I2C Library v.0.1.1
 #include <SoftwareSerial.h>
+#include <Adafruit_INA219.h>
+#include <HCSR04.h>
 
 // ==================== Pin Defination ====================
 // motor driver
@@ -47,6 +49,15 @@ auto timer = timer_create_default();  // create a timer with default settings
 
 int counter_left = 0;
 int counter_right = 0;
+
+// power sensor global variable
+Adafruit_INA219 ina219;
+
+float shuntvoltage = 0;
+float busvoltage = 0;
+float current_mA = 0;
+float loadvoltage = 0;
+float power_mW = 0;
 
 // other global variable
 char command;
@@ -109,8 +120,6 @@ void ABS() {
   int counter_diff_pre = 200;                      // difference in total counter value for rotation speed estimation
   int counter_stop = 0;                            // number of countinous low speed iterations detected
   while (counter_stop < 10) {                      // if low speed for over 10 period, exit the loop
-    counter_now = counter_left + counter_right;    // update counter values
-    counter_diff = counter_now - counter_pre;      // estimate speed
     Serial.println(counter_now);
     Serial.println(counter_diff);
     // check estimated speed
@@ -145,6 +154,10 @@ void ABS() {
     counter_diff_pre = counter_diff;
     counter_pre = counter_now;
     delay(10);
+    counter_now = counter_left + counter_right;    // update counter values
+    counter_diff = counter_now - counter_pre;      // estimate speed
+    BluetoothControl.println("abs:" + String(counter_diff * 120));
+    BluetoothControl.println("l:abs:" + String(counter_diff * 120));
   }
   stop();
   Serial.println("ABS stopped");
@@ -152,6 +165,18 @@ void ABS() {
 }
 
 // ==================== Handler Functions  ====================
+// power sensor read
+void INA219_read () {
+  shuntvoltage = ina219.getShuntVoltage_mV();
+  busvoltage = ina219.getBusVoltage_V();
+  current_mA = ina219.getCurrent_mA();
+  power_mW = ina219.getPower_mW();
+  loadvoltage = busvoltage + (shuntvoltage / 1000);
+  BluetoothControl.println("v:" + String(loadvoltage));
+  BluetoothControl.println("v:" + String(current_mA / 1000));
+  BluetoothControl.println("v:" + String(power_mW / 1000));
+}
+
 // interrupt handllers
 void handler_count_left() {
   // Serial.println("counter_left++");
@@ -171,6 +196,7 @@ void RPM() {
     // Serial.println(counter_right / 20 * 60);
     BluetoothControl.println("s:" + String(counter_left + counter_right / 20 * 60 / 2));
     Serial.println("s:" + String(counter_left + counter_right / 20 * 60 / 2));
+    // INA219_read();
     counter_left = 0;
     counter_right = 0;
   }
@@ -211,6 +237,8 @@ void serial_handler() {
       forward_right(max_speed_right);
       Serial.println("left");
       BluetoothControl.println("l:left");
+      delay(500);
+      stop();
       break;
     case 'd':  // rotate right
       state = 4;
@@ -218,6 +246,8 @@ void serial_handler() {
       backward_right(max_speed_right);
       Serial.println("right");
       BluetoothControl.println("l:right");
+      delay(500);
+      stop();
       break;
     case 'q':  // full speed forward
       state = 8;
@@ -256,6 +286,7 @@ void setup() {
   Serial.begin(9600);
   BluetoothControl.begin(9600);
   stop();
+  ina219.begin();
   Wire.begin();  // Initalize Wire library
   attachInterrupt(digitalPinToInterrupt(left_tach), handler_count_left, RISING);
   attachInterrupt(digitalPinToInterrupt(right_tach), handler_count_right, RISING);
