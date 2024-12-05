@@ -1,12 +1,12 @@
 /* APS380 CAS Project Code
    Last Modified: by Ziming MA
-   date: 2024-12-02
-   version: v0.0.5b
-   description: Bluetooth control
-   history: v0.0.1: Ziming MA     : basic control
-            v0.0.2: Ziming MA     : motor speed sensing & control
-            v0.0.3: Ahmad Kaleem  : TF-Luna Lidar INterface & CAS v1
-            v0.0.4: Ziming MA     : CAS v2 & ABS
+   date: 2024-12-04
+   version: v0.5.3
+   description: Bluetooth control / just run + testing for final report
+   history: v0.1: Ziming MA     : basic control
+            v0.2: Ziming MA     : motor speed sensing & control
+            v0.3: Ahmad Kaleem  : TF-Luna Lidar INterface & CAS v1
+            v0.4: Ziming MA     : CAS v2 & ABS
 */
 // "l: infor ... "
 // "v: 11"
@@ -16,8 +16,7 @@
 #include <Wire.h>    // Instantiate the Wire library
 #include <TFLI2C.h>  // TFLuna-I2C Library v.0.1.1
 #include <SoftwareSerial.h>
-#include <Adafruit_INA219.h>
-#include <HCSR04.h>
+#include <math.h>
 
 // ==================== Pin Defination ====================
 // motor driver
@@ -30,12 +29,12 @@
 #define right_tach 18
 // motor speed sensor
 #define rx_bluetooth 50
-#define tx_bluetooth 51
+#define tx_bluetooth 21
 
 // ==================== Constants Defination ====================
-#define max_speed_left 100
-#define max_speed_right 100
-#define CAS_trigger_distance 40
+#define max_speed_left 250
+#define max_speed_right 225
+#define CAS_trigger_distance 50
 
 // ==================== Global Variable Defination ====================
 // distance sensor global variable
@@ -50,20 +49,17 @@ auto timer = timer_create_default();  // create a timer with default settings
 int counter_left = 0;
 int counter_right = 0;
 
-// power sensor global variable
-Adafruit_INA219 ina219;
-
-float shuntvoltage = 0;
-float busvoltage = 0;
-float current_mA = 0;
-float loadvoltage = 0;
-float power_mW = 0;
-
 // other global variable
 char command;
-SoftwareSerial BluetoothControl(rx_bluetooth, tx_bluetooth);
+// SoftwareSerial BluetoothControl(rx_bluetooth, tx_bluetooth);
+SoftwareSerial BluetoothControl(52, 53);
 bool CAS_ABS = true;
 bool ABS_active = false;
+
+int min_distance_detected = 1000;
+float speed_limiting_factor = 0.0;
+int speed_left_lim = max_speed_left;
+int speed_right_lim = max_speed_right;
 
 int state = 0;  // to keep track which state car is in currently.
 /* 
@@ -77,6 +73,31 @@ int state = 0;  // to keep track which state car is in currently.
 */
 
 // ==================== Helper Functions ====================
+float get_speed_limiting_factor (int distance) {
+  if (distance < 100) {
+    return 0.2;
+  } else if (distance < 500) {
+    return (0.6 / 400) * (distance - 100) + 0.2;
+  } else {
+    return 1.0;
+  }
+}
+
+void update_speed_limiting_factor () {
+  speed_left_lim = (int) (get_speed_limiting_factor(min_distance_detected) * max_speed_left);
+  speed_right_lim = (int) (get_speed_limiting_factor(min_distance_detected) * max_speed_right);
+  
+  BluetoothControl.println("l:dist = " + String(min_distance_detected));
+  BluetoothControl.println("l:lim_factor = " + String(get_speed_limiting_factor(min_distance_detected)));
+  BluetoothControl.println("l:speed_left_lim = " + String(speed_left_lim));
+  BluetoothControl.println("l:speed_right_lim = " + String(speed_right_lim));
+  Serial.println("l:dist = " + String(min_distance_detected));
+  Serial.println("l:lim_factor = " + String(get_speed_limiting_factor(min_distance_detected)));
+  Serial.println("l:speed_left_lim = " + String(speed_left_lim));
+  Serial.println("l:speed_right_lim = " + String(speed_right_lim));
+  
+}
+
 void forward_left(int speed) {
   analogWrite(motor_left, speed);
   digitalWrite(motor_left_1, LOW);
@@ -102,7 +123,7 @@ void stop() {
   digitalWrite(motor_left_1, LOW);
   digitalWrite(motor_right, LOW);
   digitalWrite(motor_right_1, LOW);
-  Serial.println("stopped");
+  // Serial.println("stopped");
 }
 
 void ABS() {
@@ -120,6 +141,8 @@ void ABS() {
   int counter_diff_pre = 200;                      // difference in total counter value for rotation speed estimation
   int counter_stop = 0;                            // number of countinous low speed iterations detected
   while (counter_stop < 10) {                      // if low speed for over 10 period, exit the loop
+    counter_now = counter_left + counter_right;    // update counter values
+    counter_diff = counter_now - counter_pre;      // estimate speed
     Serial.println(counter_now);
     Serial.println(counter_diff);
     // check estimated speed
@@ -154,10 +177,6 @@ void ABS() {
     counter_diff_pre = counter_diff;
     counter_pre = counter_now;
     delay(10);
-    counter_now = counter_left + counter_right;    // update counter values
-    counter_diff = counter_now - counter_pre;      // estimate speed
-    BluetoothControl.println("abs:" + String(counter_diff * 120));
-    BluetoothControl.println("l:abs:" + String(counter_diff * 120));
   }
   stop();
   Serial.println("ABS stopped");
@@ -165,18 +184,6 @@ void ABS() {
 }
 
 // ==================== Handler Functions  ====================
-// power sensor read
-void INA219_read () {
-  shuntvoltage = ina219.getShuntVoltage_mV();
-  busvoltage = ina219.getBusVoltage_V();
-  current_mA = ina219.getCurrent_mA();
-  power_mW = ina219.getPower_mW();
-  loadvoltage = busvoltage + (shuntvoltage / 1000);
-  BluetoothControl.println("v:" + String(loadvoltage));
-  BluetoothControl.println("v:" + String(current_mA / 1000));
-  BluetoothControl.println("v:" + String(power_mW / 1000));
-}
-
 // interrupt handllers
 void handler_count_left() {
   // Serial.println("counter_left++");
@@ -188,15 +195,16 @@ void handler_count_right() {
   counter_right++;
 }
 
-void RPM() {
+void send_data_to_plot_1s() {
   if (!ABS_active) {
     // Serial.println("motor speed:");
     // 20 holes on the disk
     // Serial.println(counter_left / 20 * 60);
     // Serial.println(counter_right / 20 * 60);
     BluetoothControl.println("s:" + String(counter_left + counter_right / 20 * 60 / 2));
-    Serial.println("s:" + String(counter_left + counter_right / 20 * 60 / 2));
-    // INA219_read();
+    // Serial.println("s:" + String(counter_left + counter_right / 20 * 60 / 2));
+    BluetoothControl.println("l:s," + String(counter_left + counter_right / 20 * 60 / 2));
+    BluetoothControl.println("l:d," + String(min_distance_detected));
     counter_left = 0;
     counter_right = 0;
   }
@@ -208,8 +216,8 @@ void serial_handler() {
     case ' ':  // stop.
       state = 0;
       stop();
-      Serial.println("stop");
-      BluetoothControl.println("l:stop");
+      // Serial.println("stop");
+      // BluetoothControl.println("l:stop");
       break;
     case 't':  // stop.
       state = 0;
@@ -237,8 +245,6 @@ void serial_handler() {
       forward_right(max_speed_right);
       Serial.println("left");
       BluetoothControl.println("l:left");
-      delay(500);
-      stop();
       break;
     case 'd':  // rotate right
       state = 4;
@@ -246,16 +252,13 @@ void serial_handler() {
       backward_right(max_speed_right);
       Serial.println("right");
       BluetoothControl.println("l:right");
-      delay(500);
-      stop();
       break;
     case 'q':  // full speed forward
       state = 8;
-      digitalWrite(motor_left, HIGH);
-      digitalWrite(motor_left_1, LOW);
-      digitalWrite(motor_right, HIGH);
-      digitalWrite(motor_right_1, LOW);
-      Serial.println("forward full speed");
+      update_speed_limiting_factor();
+      forward_left(speed_left_lim);
+      forward_right(speed_right_lim);
+      //Serial.println("forward full speed");
       BluetoothControl.println("l:forward full speed");
       break;
     case 'e':  // flip CAS mode: ABS or Traditional
@@ -286,13 +289,16 @@ void setup() {
   Serial.begin(9600);
   BluetoothControl.begin(9600);
   stop();
-  ina219.begin();
   Wire.begin();  // Initalize Wire library
   attachInterrupt(digitalPinToInterrupt(left_tach), handler_count_left, RISING);
   attachInterrupt(digitalPinToInterrupt(right_tach), handler_count_right, RISING);
-  timer.every(1000, RPM);
-  delay(1000);
+  timer.every(1000, send_data_to_plot_1s);
+  timer.every(100, serial_handler);
+  delay(2000);
   Serial.println("initialized");
+  BluetoothControl.println("l:initialized");
+  command = 'q';
+  serial_handler();
 }
 
 // ==================== Arduino Main Loop  ====================
@@ -301,9 +307,13 @@ void loop() {
   // CAS handle
   if (tflI2C.getData(tfDist, tfAddr)) {
     //Serial.println(String(tfDist)+" cm / " + String(tfDist/2.54)+" inches");
+    min_distance_detected = tfDist;
+    // Serial.println("s:" + String(min_distance_detected));  // measure the max valid distance
     if (tfDist < CAS_trigger_distance && state > 0) {
       Serial.println("Object detected - handling");
       BluetoothControl.println("l:Object detected - handling");
+      command = ' ';
+      state = -1;
       if (CAS_ABS){
         ABS();
          BluetoothControl.println("l:ABS CAS triggered");
@@ -311,10 +321,11 @@ void loop() {
         BluetoothControl.println("l:non-ABS CAS triggered");
         stop();
       }
-      state = -1;
       Serial.println("Object detected - done");
       BluetoothControl.println("l:Object detected - done");
     }
+  } else {
+    min_distance_detected = 800;
   }
   // serial control handle
   if (Serial.available() > 0) {
@@ -329,5 +340,6 @@ void loop() {
     BluetoothControl.println("l:Arduino received: " + String(command));
     serial_handler();
   }
+  delay(1);
   timer.tick();  // tick the timer
 }
