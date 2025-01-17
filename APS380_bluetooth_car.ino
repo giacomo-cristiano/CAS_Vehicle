@@ -7,6 +7,7 @@
             v0.2: Ziming MA     : motor speed sensing & control
             v0.3: Ahmad Kaleem  : TF-Luna Lidar INterface & CAS v1
             v0.4: Ziming MA     : CAS v2 & ABS
+            v0.5: Ziming MA & Giacomo Cristiano : CAS Speed Limiting Function & ABS 
 */
 // "l: infor ... "
 // "v: 11"
